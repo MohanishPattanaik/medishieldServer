@@ -13,3 +13,12 @@ class Log(db.Model):
         self.reg_no = reg_no
         self.tool = tool
         self.timestamp = timestamp
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "username": self.username,
+            "reg_no": self.reg_no,
+            "tool": self.tool,
+            "timestamp": self.timestamp.isoformat(),
+        }

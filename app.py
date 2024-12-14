@@ -1,5 +1,7 @@
+import datetime
 import os
 
+from arduino import Arduino
 from db import db
 from flask import Flask, jsonify, make_response, redirect, request, session
 from flask_cors import CORS
@@ -34,6 +36,9 @@ def create_app(test_config=None):
         os.makedirs(app.instance_path)
     except OSError:
         pass
+
+    # change the port to the port of the arduino
+    arduino = Arduino("COM10", 9600)
 
     # a simple page that says hello
     @app.route("/login", methods=["POST"])
@@ -86,18 +91,70 @@ def create_app(test_config=None):
                     "status": 409,
                 }
             )
-        user = User(reg_no, password, username)
+
+        # Manually manage the auto-increment logic
+        if User.query.count() == 0:
+            next_id = 1
+        else:
+            last_user = User.query.order_by(User.fingerID.desc()).first()
+            next_id = (
+                (last_user.fingerID + 1)
+                if last_user and last_user.fingerID < 127
+                else 1
+            )
+
+        user = User(reg_no=reg_no, password=password, username=username)
+        user.fingerID = next_id
+
+        # tell arduino to create a new user
+        arduino.write("1")
+        # wait for the arduino to ask for the user id
+        arduino.wait_for(["enter finger print id from 1 to 127"])
+        # send the user id to the arduino
+        arduino.write(str(user.fingerID))
+        # wait for the prints to match
+        arduino.wait_for(["stored!"])
+
         db.session.add(user)
         db.session.commit()
+
         return jsonify({"message": "User created successfully"})
 
     @app.route("/auth", methods=["POST"])
     def auth():
-        return "Auth Page"
+        arduino.write("3")
+        arduino.wait_for(["Found a print match!"])
+        FingerID = arduino.wait_for(["Found ID #"])
+        FingerID = FingerID.split("#")[1].strip()
+        user = User.query.filter_by(fingerID=FingerID).first()
+        if user is None:
+            return jsonify(
+                {
+                    "message": "User not found",
+                    "status": 404,
+                }
+            )
+        tool = request.get_json().get("tool")
+        log = Log(
+            username=user.username,
+            reg_no=user.reg_no,
+            tool=tool,
+            timestamp=datetime.datetime.now(),
+        )
+        db.session.add(log)
+        db.session.commit()
+        return jsonify(
+            {
+                "message": "User authenticated successfully",
+                "status": 200,
+            }
+        )
 
     @app.route("/logs", methods=["GET"])
     def logs():
-        return jsonify([log for log in Log.query.all()])
+        logs = Log.query.all()
+        logs_list = [log.to_dict() for log in logs]
+        return jsonify(logs_list)
 
     return app
 
